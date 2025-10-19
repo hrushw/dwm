@@ -41,6 +41,8 @@ static const int resizehints = 1;    /* 1 means respect size hints in tiled resi
 static const int lockfullscreen = 1; /* 1 will force focus on the fullscreen window */
 static const int refreshrate = 120;  /* refresh rate (per second) for client move/resize */
 
+const Arg tfarg = { .i = 1 };
+
 /* Bartabgroups properties */
 #define BARTAB_BORDERS 1       // 0 = off, 1 = on
 #define BARTAB_BOTTOMBORDER 1  // 0 = off, 1 = on
