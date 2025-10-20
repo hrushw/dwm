@@ -307,7 +307,27 @@ static void bartabdraw(Monitor *m, Client *c, int unused, int x, int w, int grou
 static void bartabclick(Monitor *m, Client *c, int passx, int x, int w, int unused, Arg *arg);
 static void bartabcalculate(Monitor *m, int offx, int w, int passx, void(*tabfn)(Monitor *, Client *, int, int, int, int, Arg *arg), Arg *arg);
 
-#include "patch/include.h"
+static int width_ltsymbol(Bar *bar, BarWidthArg *a);
+static int draw_ltsymbol(Bar *bar, BarDrawArg *a);
+static int click_ltsymbol(Bar *bar, Arg *arg, BarClickArg *a);
+static int width_status(Bar *bar, BarWidthArg *a);
+static int draw_status(Bar *bar, BarDrawArg *a);
+static int click_status(Bar *bar, Arg *arg, BarClickArg *a);
+static int width_tags(Bar *bar, BarWidthArg *a);
+static int draw_tags(Bar *bar, BarDrawArg *a);
+static int click_tags(Bar *bar, Arg *arg, BarClickArg *a);
+static int width_wintitle(Bar *bar, BarWidthArg *a);
+static int draw_wintitle(Bar *bar, BarDrawArg *a);
+static int click_wintitle(Bar *bar, Arg *arg, BarClickArg *a);
+#define HIDDEN(C) ((getstate(C->win) == IconicState))
+
+static void hide(Client *c);
+static void show(Client *c);
+static void togglewin(const Arg *arg);
+static Client * prevtiled(Client *c);
+static void showhideclient(const Arg *arg);
+
+
 /* variables */
 static const char broken[] = "broken";
 static char stext[256];
@@ -345,7 +365,227 @@ static Window root, wmcheckwin;
 /* configuration, allows nested code to access above variables */
 #include "config.h"
 
-#include "patch/include.c"
+/* Bar functionality */
+/* bar_ltsymbol.c */
+int
+width_ltsymbol(Bar *bar, BarWidthArg *a)
+{
+	return TEXTW(bar->mon->ltsymbol);
+}
+
+int
+draw_ltsymbol(Bar *bar, BarDrawArg *a)
+{
+	return drw_text(drw, a->x, 0, a->w, bh, lrpad / 2, bar->mon->ltsymbol, 0);
+}
+
+int
+click_ltsymbol(Bar *bar, Arg *arg, BarClickArg *a)
+{
+	return ClkLtSymbol;
+}
+
+
+/* bar_status.c */
+int
+width_status(Bar *bar, BarWidthArg *a)
+{
+	return TEXTW(stext);
+}
+
+int
+draw_status(Bar *bar, BarDrawArg *a)
+{
+	return drw_text(drw, a->x, 0, a->w, bh, lrpad / 2, stext, 0);
+}
+
+int
+click_status(Bar *bar, Arg *arg, BarClickArg *a)
+{
+	return ClkStatusText;
+}
+
+/* bar_tags.c */
+int
+width_tags(Bar *bar, BarWidthArg *a)
+{
+	int w, i;
+
+	for (w = 0, i = 0; i < LENGTH(tags); i++) {
+		w += TEXTW(tags[i]);
+	}
+	return w;
+}
+
+int
+draw_tags(Bar *bar, BarDrawArg *a)
+{
+	int invert;
+	int w, x = a->x;
+	int boxs = drw->fonts->h / 9;
+	int boxw = drw->fonts->h / 6 + 2;
+	unsigned int i, occ = 0, urg = 0;
+	Client *c;
+	Monitor *m = bar->mon;
+
+	for (c = m->clients; c; c = c->next) {
+		occ |= c->tags;
+		if (c->isurgent)
+			urg |= c->tags;
+	}
+
+	for (i = 0; i < LENGTH(tags); i++) {
+		invert = urg & 1 << i;
+		w = TEXTW(tags[i]);
+		drw_setscheme(drw, scheme[m->tagset[m->seltags] & 1 << i ? SchemeSel : SchemeNorm]);
+		drw_text(drw, x, 0, w, bh, lrpad / 2, tags[i], invert);
+		if (occ & 1 << i)
+			drw_rect(drw, x + boxs, boxs, boxw, boxw,
+				m == selmon && selmon->sel && selmon->sel->tags & 1 << i, invert);
+		x += w;
+	}
+
+	return x;
+}
+
+int
+click_tags(Bar *bar, Arg *arg, BarClickArg *a)
+{
+	int i = 0, x = lrpad / 2;
+
+	do {
+		x += TEXTW(tags[i]);
+	} while (a->rel_x >= x && ++i < LENGTH(tags));
+	if (i < LENGTH(tags)) {
+		arg->ui = 1 << i;
+	}
+	return ClkTagBar;
+}
+
+/* bar_wintitle.c */
+int
+width_wintitle(Bar *bar, BarWidthArg *a)
+{
+	return a->max_width;
+}
+
+int
+draw_wintitle(Bar *bar, BarDrawArg *a)
+{
+	int boxs = drw->fonts->h / 9;
+	int boxw = drw->fonts->h / 6 + 2;
+	int x = a->x, w = a->w;
+	Monitor *m = bar->mon;
+
+	if (m->sel) {
+		drw_setscheme(drw, scheme[m == selmon ? SchemeSel : SchemeNorm]);
+		drw_text(drw, x, 0, w, bh, lrpad / 2, m->sel->name, 0);
+		if (m->sel->isfloating)
+			drw_rect(drw, x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
+	} else {
+		drw_setscheme(drw, scheme[SchemeNorm]);
+		drw_rect(drw, x, 0, w, bh, 1, 1);
+	}
+	return x + w;
+}
+
+int
+click_wintitle(Bar *bar, Arg *arg, BarClickArg *a)
+{
+	return ClkWinTitle;
+}
+
+/* bar_wintitleactions.c */
+void
+hide(Client *c) {
+
+	Client *n;
+	if (!c || HIDDEN(c))
+		return;
+
+	Window w = c->win;
+	static XWindowAttributes ra, ca;
+
+	// more or less taken directly from blackbox's hide() function
+	XGrabServer(dpy);
+	XGetWindowAttributes(dpy, root, &ra);
+	XGetWindowAttributes(dpy, w, &ca);
+	// prevent UnmapNotify events
+	XSelectInput(dpy, root, ra.your_event_mask & ~SubstructureNotifyMask);
+	XSelectInput(dpy, w, ca.your_event_mask & ~StructureNotifyMask);
+	XUnmapWindow(dpy, w);
+	setclientstate(c, IconicState);
+	XSelectInput(dpy, root, ra.your_event_mask);
+	XSelectInput(dpy, w, ca.your_event_mask);
+	XUngrabServer(dpy);
+
+	if (c->isfloating || !c->mon->lt[c->mon->sellt]->arrange) {
+		for (n = c->snext; n && (!ISVISIBLE(n) || HIDDEN(n)); n = n->snext);
+		if (!n)
+			for (n = c->mon->stack; n && (!ISVISIBLE(n) || HIDDEN(n)); n = n->snext);
+	} else {
+		n = nexttiled(c);
+		if (!n)
+			n = prevtiled(c);
+	}
+	focus(n);
+	arrange(c->mon);
+}
+
+void
+show(Client *c)
+{
+	if (!c || !HIDDEN(c))
+		return;
+
+	XMapWindow(dpy, c->win);
+	setclientstate(c, NormalState);
+	arrange(c->mon);
+}
+
+void
+togglewin(const Arg *arg)
+{
+	Client *c = (Client*)arg->v;
+	if (!c)
+		return;
+	if (c == selmon->sel)
+		hide(c);
+	else {
+		if (HIDDEN(c))
+			show(c);
+		focus(c);
+		restack(c->mon);
+	}
+}
+
+Client *
+prevtiled(Client *c)
+{
+	Client *p, *i;
+	for (p = NULL, i = c->mon->clients; c && i != c; i = i->next)
+		if (ISVISIBLE(i) && !HIDDEN(i))
+			p = i;
+	return p;
+}
+
+void
+showhideclient(const Arg *arg)
+{
+	Client *c = (Client*)arg->v;
+	if (!c)
+		c = selmon->sel;
+	if (!c)
+		return;
+
+	if (HIDDEN(c)) {
+		show(c);
+		focus(c);
+		restack(c->mon);
+	} else {
+		hide(c);
+	}
+}
 
 /* compile-time check if all tags fit into an unsigned int bit array. */
 struct NumTags { char limitexceeded[LENGTH(tags) > 31 ? -1 : 1]; };
