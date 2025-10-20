@@ -50,10 +50,10 @@ static const Rule rules[] = {
 static const BarRule barrules[] = {
 	/* monitor  bar    alignment         widthfunc              drawfunc              clickfunc           name */
 	{ -1,       0,     BAR_ALIGN_LEFT,   width_tags,            draw_tags,            click_tags,         "tags" },
-	{ -1,       1,     BAR_ALIGN_LEFT,   width_ltsymbol,        draw_ltsymbol,        click_ltsymbol,     "layout" },
+	{ -1,       0,     BAR_ALIGN_LEFT,   width_ltsymbol,        draw_ltsymbol,        click_ltsymbol,     "layout" },
 	{ 'A',      0,     BAR_ALIGN_RIGHT,  width_status,          draw_status,          click_status,       "status" },
-	{ -1,       0,     BAR_ALIGN_NONE,   width_wintitle,        draw_wintitle,        click_wintitle,     "wintitle" },
-	{ -1,       1,     BAR_ALIGN_NONE,   width_bartabgroups,    draw_bartabgroups,    click_bartabgroups, "bartabgroups" },
+//	{ -1,       0,     BAR_ALIGN_NONE,   width_wintitle,        draw_wintitle,        click_wintitle,     "wintitle" },
+	{ -1,       0,     BAR_ALIGN_NONE,   width_bartabgroups,    draw_bartabgroups,    click_bartabgroups, "bartabgroups" },
 };
 
 /* layout(s) */
@@ -99,7 +99,7 @@ static const Layout layouts[] = {
 static char dmenumon[2] = "0"; /* component of dmenucmd, manipulated in spawn() */
 static const char *dmenucmd[] = { "dmenu_run", "-m", dmenumon, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4, NULL };
 static const char *termcmd[]  = { "st", NULL };
-static const char *term2cmd[]  = { "stkit", NULL };
+static const char *term2cmd[]  = { "kitty", NULL };
 static const char *emacscmd[]  = { "emacsclient", "-nc", NULL };
 static const char *browsercmd[]  = { "qutebrowser", NULL };
 
