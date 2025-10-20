@@ -45,6 +45,7 @@
 #include "util.h"
 
 /* macros */
+#define BARRULES                20
 #define BUTTONMASK              (ButtonPressMask|ButtonReleaseMask)
 #define CLEANMASK(mask)         (mask & ~(numlockmask|LockMask) & (ShiftMask|ControlMask|Mod1Mask|Mod2Mask|Mod3Mask|Mod4Mask|Mod5Mask))
 #define INTERSECT(x,y,w,h,m)    (MAX(0, MIN((x)+(w),(m)->wx+(m)->ww) - MAX((x),(m)->wx)) \
@@ -59,13 +60,26 @@
 
 /* enums */
 enum { CurNormal, CurResize, CurMove, CurLast }; /* cursor */
-enum { SchemeNorm, SchemeSel, SchemeTabActive, SchemeTabInactive }; /* color schemes */
+enum { SchemeNorm, SchemeSel, SchemeHid, SchemeTabActive, SchemeTabInactive }; /* color schemes */
 enum { NetSupported, NetWMName, NetWMState, NetWMCheck,
        NetWMFullscreen, NetActiveWindow, NetWMWindowType,
        NetWMWindowTypeDialog, NetClientList, NetDesktopNames, NetDesktopViewport, NetNumberOfDesktops, NetCurrentDesktop, NetLast }; /* EWMH atoms */
 enum { WMProtocols, WMDelete, WMState, WMTakeFocus, WMLast }; /* default atoms */
 enum { ClkTagBar, ClkLtSymbol, ClkStatusText, ClkWinTitle,
        ClkClientWin, ClkRootWin, ClkLast }; /* clicks */
+enum {
+	BAR_ALIGN_LEFT,
+	BAR_ALIGN_CENTER,
+	BAR_ALIGN_RIGHT,
+	BAR_ALIGN_LEFT_LEFT,
+	BAR_ALIGN_LEFT_RIGHT,
+	BAR_ALIGN_LEFT_CENTER,
+	BAR_ALIGN_NONE,
+	BAR_ALIGN_RIGHT_LEFT,
+	BAR_ALIGN_RIGHT_RIGHT,
+	BAR_ALIGN_RIGHT_CENTER,
+	BAR_ALIGN_LAST
+}; /* bar alignment */
 
 typedef union {
 	int i;
@@ -73,6 +87,46 @@ typedef union {
 	float f;
 	const void *v;
 } Arg;
+
+typedef struct Monitor Monitor;
+typedef struct Bar Bar;
+struct Bar {
+	Window win;
+	Monitor *mon;
+	Bar *next;
+	int idx;
+	int topbar;
+	int bx, by, bw, bh; /* bar geometry */
+	int w[BARRULES]; // module width
+	int x[BARRULES]; // module position
+};
+
+typedef struct {
+	int max_width;
+} BarWidthArg;
+
+typedef struct {
+	int x;
+	int w;
+} BarDrawArg;
+
+typedef struct {
+	int rel_x;
+	int rel_y;
+	int rel_w;
+	int rel_h;
+} BarClickArg;
+
+typedef struct {
+	int monitor;
+	int bar;
+	int alignment; // see bar alignment enum
+	int (*widthfunc)(Bar *bar, BarWidthArg *a);
+	int (*drawfunc)(Bar *bar, BarDrawArg *a);
+	int (*clickfunc)(Bar *bar, Arg *arg, BarClickArg *a);
+	char *name; // for debugging
+	int x, w; // position, width for internal use
+} BarRule;
 
 typedef struct {
 	unsigned int click;
@@ -82,7 +136,6 @@ typedef struct {
 	const Arg arg;
 } Button;
 
-typedef struct Monitor Monitor;
 typedef struct Client Client;
 struct Client {
 	char name[256];
@@ -116,20 +169,21 @@ struct Monitor {
 	float mfact;
 	int nmaster;
 	int num;
-	int by;               /* bar geometry */
+//	int by;               /* bar geometry */
 	int mx, my, mw, mh;   /* screen size */
 	int wx, wy, ww, wh;   /* window area  */
 	unsigned int seltags;
 	unsigned int sellt;
 	unsigned int tagset[2];
 	int showbar;
-	int topbar;
+//	int topbar;
 	Client *clients;
 	Client *sel;
 	Client *stack;
 	Client *tagmarked[32];
 	Monitor *next;
-	Window barwin;
+//	Window barwin;
+	Bar *bar;
 	const Layout *lt[2];
 };
 
@@ -165,6 +219,7 @@ static void detachstack(Client *c);
 static Monitor *dirtomon(int dir);
 static void drawbar(Monitor *m);
 static void drawbars(void);
+static void drawbarwin(Bar *bar);
 static void enternotify(XEvent *e);
 static void expose(XEvent *e);
 static void focus(Client *c);
@@ -244,6 +299,15 @@ static void zoom(const Arg *arg);
 static void centeredmaster(Monitor *m);
 static void centeredfloatingmaster(Monitor *m);
 
+static int width_bartabgroups(Bar *bar, BarWidthArg *a);
+static int draw_bartabgroups(Bar *bar, BarDrawArg *a);
+static int click_bartabgroups(Bar *bar, Arg *arg, BarClickArg *a);
+
+static void bartabdraw(Monitor *m, Client *c, int unused, int x, int w, int groupactive, Arg *arg);
+static void bartabclick(Monitor *m, Client *c, int passx, int x, int w, int unused, Arg *arg);
+static void bartabcalculate(Monitor *m, int offx, int w, int passx, void(*tabfn)(Monitor *, Client *, int, int, int, int, Arg *arg), Arg *arg);
+
+#include "patch/include.h"
 /* variables */
 static const char broken[] = "broken";
 static char stext[256];
@@ -280,6 +344,8 @@ static Window root, wmcheckwin;
 
 /* configuration, allows nested code to access above variables */
 #include "config.h"
+
+#include "patch/include.c"
 
 /* compile-time check if all tags fit into an unsigned int bit array. */
 struct NumTags { char limitexceeded[LENGTH(tags) > 31 ? -1 : 1]; };
@@ -389,13 +455,56 @@ applysizehints(Client *c, int *x, int *y, int *w, int *h, int interact)
 	return *x != c->x || *y != c->y || *w != c->w || *h != c->h;
 }
 
+int
+width_bartabgroups(Bar *bar, BarWidthArg *a)
+{
+	return a->max_width;
+}
+
+int
+draw_bartabgroups(Bar *bar, BarDrawArg *a)
+{
+	drw_rect(drw, a->x, 0, a->w, bh, 1, 1);
+	bartabcalculate(bar->mon, a->x, a->w, -1, bartabdraw, NULL);
+	return a->x + a->w;
+}
+
+int
+click_bartabgroups(Bar *bar, Arg *arg, BarClickArg *a)
+{
+	bartabcalculate(bar->mon, 0, a->rel_w, a->rel_x, bartabclick, arg);
+	return ClkWinTitle;
+}
+
+#ifndef HIDDEN
+#define HIDDEN(c) 0
+#endif
+
+#ifndef BARTAB_STACKWEIGHT
+#define BARTAB_STACKWEIGHT 1   // stack weight compared to hidden and floating window titles
+#endif
+#ifndef BARTAB_HIDDENWEIGHT
+#define BARTAB_HIDDENWEIGHT 1  // hidden window title weight
+#endif
+#ifndef BARTAB_FLOATWEIGHT
+#define BARTAB_FLOATWEIGHT 1   // floating window title weight, set to 0 to not show floating windows
+#endif
+
 void
-bartabdraw(Monitor *m, Client *c, int unused, int x, int w, int groupactive) {
+bartabdraw(Monitor *m, Client *c, int unused, int x, int w, int groupactive, Arg *arg) {
 	if (!c) return;
 	int i, nclienttags = 0, nviewtags = 0;
 
 	drw_setscheme(drw, scheme[
-		m->sel == c ? SchemeSel : (groupactive ? SchemeTabActive: SchemeTabInactive)
+		m->sel == c
+		? SchemeSel
+		#ifdef HIDDEN
+		: HIDDEN(c)
+		? SchemeHid
+		#endif
+		: groupactive
+		? SchemeTabActive
+		: SchemeTabInactive
 	]);
 	drw_text(drw, x, 0, w, bh, lrpad / 2, c->name, 0);
 
@@ -437,6 +546,7 @@ battabclick(Monitor *m, Client *c, int passx, int x, int w, int unused) {
 	}
 }
 
+/*
 void
 bartabcalculate(
 	Monitor *m, int offx, int sw, int passx,
@@ -480,6 +590,141 @@ bartabcalculate(
 		i++;
 	}
 }
+*/
+
+void
+bartabclick(Monitor *m, Client *c, int passx, int x, int w, int unused, Arg *arg)
+{
+	if (passx >= x && passx <= x + w)
+		arg->v = c;
+}
+
+void
+bartabcalculate(
+	Monitor *m, int offx, int tabw, int passx,
+	void(*tabfn)(Monitor *, Client *, int, int, int, int, Arg *arg), Arg *arg
+) {
+	Client *c;
+	int
+		i, clientsnmaster = 0, clientsnstack = 0, clientsnfloating = 0, clientsnhidden = 0,
+		masteractive = 0, fulllayout = 0,
+		x = offx, w, r, num = 0, den, tgactive;
+
+	for (i = 0; i < LENGTH(bartabmonfns); i++)
+		if (m ->lt[m->sellt]->arrange == bartabmonfns[i]) {
+			fulllayout = 1;
+			break;
+		}
+
+	for (i = 0, c = m->clients; c; c = c->next) {
+		if (!ISVISIBLE(c))
+			continue;
+		if (HIDDEN(c)) {
+			clientsnhidden++;
+			continue;
+		}
+		if (c->isfloating) {
+			clientsnfloating++;
+			continue;
+		}
+		if (m->sel == c)
+			masteractive = i < m->nmaster;
+		if (i < m->nmaster)
+			clientsnmaster++;
+		else
+			clientsnstack++;
+		i++;
+	}
+
+	if (clientsnmaster + clientsnstack + clientsnfloating + clientsnhidden == 0)
+		return;
+
+	tgactive = 1;
+	num = tabw;
+	/* floating mode */
+	if ((fulllayout && BARTAB_FLOATWEIGHT) || clientsnmaster + clientsnstack == 0 || !m->lt[m->sellt]->arrange) {
+		den = clientsnmaster + clientsnstack + clientsnfloating + clientsnhidden;
+		r = num % den;
+		w = num / den;
+		for (c = m->clients, i = 0; c; c = c->next) {
+			if (!ISVISIBLE(c))
+				continue;
+			tabfn(m, c, passx, x, w + (i < r ? 1 : 0), tgactive, arg);
+			x += w + (i < r ? 1 : 0);
+			i++;
+		}
+	/* no master and stack mode, e.g. monocole, grid layouts, fibonacci */
+	} else if (fulllayout) {
+		den = clientsnmaster + clientsnstack + clientsnhidden;
+		r = num % den;
+		w = num / den;
+		for (c = m->clients, i = 0; c; c = c->next) {
+			if (!ISVISIBLE(c) || (c->isfloating && !HIDDEN(c)))
+				continue;
+			tabfn(m, c, passx, x, w + (i < r ? 1 : 0), tgactive, arg);
+			x += w + (i < r ? 1 : 0);
+			i++;
+		}
+	/* tiled mode */
+	} else {
+		den = clientsnmaster;
+		c = m->clients;
+		i = 0;
+		if (den) {
+			if (clientsnstack + clientsnfloating * BARTAB_FLOATWEIGHT + clientsnhidden) {
+				tgactive = masteractive;
+				num = tabw * m->mfact;
+			}
+			r = num % den;
+			w = num / den;
+			for (; c && i < m->nmaster; c = c->next) { // tiled master
+				if (!ISVISIBLE(c) || c->isfloating || HIDDEN(c))
+					continue;
+				tabfn(m, c, passx, x, w + (i < r ? 1 : 0), tgactive, arg);
+				x += w + (i < r ? 1 : 0);
+				i++;
+			}
+			tgactive = !tgactive;
+			num = tabw - num;
+		}
+
+		den = clientsnstack * BARTAB_STACKWEIGHT + clientsnfloating * BARTAB_FLOATWEIGHT + clientsnhidden * BARTAB_HIDDENWEIGHT;
+		if (!den)
+			return;
+
+		r = num % den;
+		w = num / den;
+		#if BARTAB_STACKWEIGHT
+		for (; c; c = c->next) { // tiled stack
+			if (!ISVISIBLE(c) || HIDDEN(c) || c->isfloating)
+				continue;
+			tabfn(m, c, passx, x, w * BARTAB_STACKWEIGHT + (i - m->nmaster < r ? 1 : 0), tgactive, arg);
+			x += w * BARTAB_STACKWEIGHT + (i - m->nmaster < r ? 1 : 0);
+			i++;
+		}
+		#endif // BARTAB_STACKWEIGHT
+
+		#if BARTAB_HIDDENWEIGHT
+		for (c = m->clients; c; c = c->next) { // hidden windows
+			if (!ISVISIBLE(c) || !HIDDEN(c))
+				continue;
+			tabfn(m, c, passx, x, w * BARTAB_HIDDENWEIGHT + (i - m->nmaster < r ? 1 : 0), tgactive, arg);
+			x += w * BARTAB_HIDDENWEIGHT + (i - m->nmaster < r ? 1 : 0);
+			i++;
+		}
+		#endif // BARTAB_HIDDENWEIGHT
+
+		#if BARTAB_FLOATWEIGHT
+		for (c = m->clients; c; c = c->next) { // floating windows
+			if (!ISVISIBLE(c) || HIDDEN(c) || !c->isfloating)
+				continue;
+			tabfn(m, c, passx, x, w * BARTAB_FLOATWEIGHT + (i - m->nmaster < r ? 1 : 0), tgactive, arg);
+			x += w * BARTAB_FLOATWEIGHT + (i - m->nmaster < r ? 1 : 0);
+			i++;
+		}
+		#endif // BARTAB_FLOATWEIGHT
+	}
+}
 
 void
 arrange(Monitor *m)
@@ -520,11 +765,14 @@ attachstack(Client *c)
 void
 buttonpress(XEvent *e)
 {
-	unsigned int i, x, click;
+	int click, i, r, mi;
 	Arg arg = {0};
 	Client *c;
 	Monitor *m;
+	Bar *bar;
 	XButtonPressedEvent *ev = &e->xbutton;
+	const BarRule *br;
+	BarClickArg carg = { 0, 0, 0, 0 };
 
 	click = ClkRootWin;
 	/* focus monitor if necessary */
@@ -533,21 +781,32 @@ buttonpress(XEvent *e)
 		selmon = m;
 		focus(NULL);
 	}
-	if (ev->window == selmon->barwin) {
-		i = x = 0;
-		do
-			x += TEXTW(tags[i]);
-		while (ev->x >= x && ++i < LENGTH(tags));
-		if (i < LENGTH(tags)) {
-			click = ClkTagBar;
-			arg.ui = 1 << i;
-		} else if (ev->x < x + TEXTW(selmon->ltsymbol))
-			click = ClkLtSymbol;
-		else if (ev->x > selmon->ww - (int)TEXTW(stext))
-			click = ClkStatusText;
-		else // Focus clicked tab bar item
-			bartabcalculate(selmon, x, TEXTW(stext) - lrpad + 2, ev->x, battabclick);
-	} else if ((c = wintoclient(ev->window))) {
+
+	for (mi = 0, m = mons; m && m != selmon; m = m->next, mi++); // get the monitor index
+	for (bar = selmon->bar; bar; bar = bar->next) {
+		if (ev->window == bar->win) {
+			for (r = 0; r < LENGTH(barrules); r++) {
+				br = &barrules[r];
+				if (br->bar != bar->idx || (br->monitor == 'A' && m != selmon) || br->clickfunc == NULL)
+					continue;
+				if (br->monitor != 'A' && br->monitor != -1 && br->monitor != mi)
+					continue;
+				if (bar->x[r] <= ev->x && ev->x <= bar->x[r] + bar->w[r]) {
+					carg.rel_x = ev->x - bar->x[r];
+					carg.rel_y = ev->y;
+					carg.rel_w = bar->w[r];
+					carg.rel_h = bar->bh;
+					click = br->clickfunc(bar, &arg, &carg);
+					if (click < 0)
+						return;
+					break;
+				}
+			}
+			break;
+		}
+	}
+
+	if (click == ClkRootWin && (c = wintoclient(ev->window))) {
 		focus(c);
 		restack(selmon);
 		XAllowEvents(dpy, ReplayPointer, CurrentTime);
@@ -556,7 +815,7 @@ buttonpress(XEvent *e)
 	for (i = 0; i < LENGTH(buttons); i++)
 		if (click == buttons[i].click && buttons[i].func && buttons[i].button == ev->button
 		&& CLEANMASK(buttons[i].mask) == CLEANMASK(ev->state))
-			buttons[i].func(click == ClkTagBar && buttons[i].arg.i == 0 ? &arg : &buttons[i].arg);
+			buttons[i].func((click == ClkTagBar || click == ClkWinTitle) && buttons[i].arg.i == 0 ? &arg : &buttons[i].arg);
 }
 
 void
@@ -602,6 +861,7 @@ void
 cleanupmon(Monitor *mon)
 {
 	Monitor *m;
+	Bar *bar;
 
 	if (mon == mons)
 		mons = mons->next;
@@ -609,8 +869,12 @@ cleanupmon(Monitor *mon)
 		for (m = mons; m && m->next != mon; m = m->next);
 		m->next = mon->next;
 	}
-	XUnmapWindow(dpy, mon->barwin);
-	XDestroyWindow(dpy, mon->barwin);
+	for (bar = mon->bar; bar; bar = mon->bar) {
+		XUnmapWindow(dpy, bar->win);
+		XDestroyWindow(dpy, bar->win);
+		mon->bar = bar->next;
+		free(bar);
+	}
 	free(mon);
 }
 
@@ -663,6 +927,7 @@ void
 configurenotify(XEvent *e)
 {
 	Monitor *m;
+	Bar *bar;
 	Client *c;
 	XConfigureEvent *ev = &e->xconfigure;
 	int dirty;
@@ -679,7 +944,8 @@ configurenotify(XEvent *e)
 				for (c = m->clients; c; c = c->next)
 					if (c->isfullscreen)
 						resizeclient(c, m->mx, m->my, m->mw, m->mh);
-				XMoveResizeWindow(dpy, m->barwin, m->wx, m->by, m->ww, bh);
+				for (bar = m->bar; bar; bar = bar->next)
+					XMoveResizeWindow(dpy, bar->win, bar->bx, bar->by, bar->bw, bar->bh);
 			}
 			focus(NULL);
 			arrange(NULL);
@@ -742,17 +1008,40 @@ configurerequest(XEvent *e)
 Monitor *
 createmon(void)
 {
-	Monitor *m;
+	Monitor *m, *mon;
+	int i, n, mi, max_bars = 2, istopbar = topbar;
+
+	const BarRule *br;
+	Bar *bar;
 
 	m = ecalloc(1, sizeof(Monitor));
 	m->tagset[0] = m->tagset[1] = 1;
 	m->mfact = mfact;
 	m->nmaster = nmaster;
 	m->showbar = showbar;
-	m->topbar = topbar;
+
+	for (mi = 0, mon = mons; mon; mon = mon->next, mi++); // monitor index
 	m->lt[0] = &layouts[0];
 	m->lt[1] = &layouts[1 % LENGTH(layouts)];
 	strncpy(m->ltsymbol, layouts[0].symbol, sizeof m->ltsymbol);
+
+	/* Derive the number of bars for this monitor based on bar rules */
+	for (n = -1, i = 0; i < LENGTH(barrules); i++) {
+		br = &barrules[i];
+		if (br->monitor == 'A' || br->monitor == -1 || br->monitor == mi)
+			n = MAX(br->bar, n);
+	}
+
+	for (i = 0; i <= n && i < max_bars; i++) {
+		bar = ecalloc(1, sizeof(Bar));
+		bar->mon = m;
+		bar->idx = i;
+		bar->next = m->bar;
+		bar->topbar = istopbar;
+		m->bar = bar;
+		istopbar = !istopbar;
+	}
+
 	return m;
 }
 
@@ -836,61 +1125,115 @@ dirtomon(int dir)
 void
 drawbar(Monitor *m)
 {
-	int x, w, tw = 0;
-	int boxs = drw->fonts->h / 9;
-	int boxw = drw->fonts->h / 6 + 2;
-	unsigned int i, occ = 0, urg = 0;
-	Client *c;
-
-	if (!m->showbar)
-		return;
-
-	/* draw status first so it can be overdrawn by tags later */
-	if (m == selmon) { /* status is only drawn on selected monitor */
-		drw_setscheme(drw, scheme[SchemeNorm]);
-		tw = TEXTW(stext) - lrpad + 2; /* 2px right padding */
-		drw_text(drw, m->ww - tw, 0, tw, bh, 0, stext, 0);
-	}
-
-	for (c = m->clients; c; c = c->next) {
-		occ |= c->tags;
-		if (c->isurgent)
-			urg |= c->tags;
-	}
-	x = 0;
-	for (i = 0; i < LENGTH(tags); i++) {
-		w = TEXTW(tags[i]);
-		drw_setscheme(drw, scheme[m->tagset[m->seltags] & 1 << i ? SchemeSel : SchemeNorm]);
-		drw_text(drw, x, 0, w, bh, lrpad / 2, tags[i], urg & 1 << i);
-		if (occ & 1 << i)
-			drw_rect(drw, x + boxs, boxs, boxw, boxw,
-				m == selmon && selmon->sel && selmon->sel->tags & 1 << i,
-				urg & 1 << i);
-		x += w;
-	}
-	w = TEXTW(m->ltsymbol);
-	drw_setscheme(drw, scheme[SchemeNorm]);
-	x = drw_text(drw, x, 0, w, bh, lrpad / 2, m->ltsymbol, 0);
-
-	// Draw bartabgroups
-	drw_rect(drw, x, 0, m->ww - tw - x, bh, 1, 1);
-	if ((w = m->ww - tw - x) > bh) {
-		bartabcalculate(m, x, tw, -1, bartabdraw);
-		if (BARTAB_BOTTOMBORDER) {
-			drw_setscheme(drw, scheme[SchemeTabActive]);
-			drw_rect(drw, 0, bh - 1, m->ww, 1, 1, 0);
-		}
-	}
-	drw_map(drw, m->barwin, 0, 0, m->ww, bh);
+	Bar *bar;
+	for (bar = m->bar; bar; bar = bar->next)
+		drawbarwin(bar);
 }
 
 void
 drawbars(void)
 {
 	Monitor *m;
-
 	for (m = mons; m; m = m->next)
 		drawbar(m);
+}
+
+void
+drawbarwin(Bar *bar)
+{
+	if (!bar->win)
+		return;
+	Monitor *mon;
+	int r, w, mi;
+	int rx, lx, rw, lw; // bar size, split between left and right if a center module is added
+	const BarRule *br;
+	BarWidthArg warg = { 0 };
+	BarDrawArg darg  = { 0, 0 };
+
+	for (mi = 0, mon = mons; mon && mon != bar->mon; mon = mon->next, mi++); // get the monitor index
+	rw = lw = bar->bw;
+	rx = lx = 0;
+
+	drw_setscheme(drw, scheme[SchemeNorm]);
+	drw_rect(drw, lx, 0, lw, bh, 1, 1);
+	for (r = 0; r < LENGTH(barrules); r++) {
+		br = &barrules[r];
+		if (br->bar != bar->idx || br->drawfunc == NULL || (br->monitor == 'A' && bar->mon != selmon))
+			continue;
+		if (br->monitor != 'A' && br->monitor != -1 && br->monitor != mi)
+			continue;
+		drw_setscheme(drw, scheme[SchemeNorm]);
+		warg.max_width = (br->alignment < BAR_ALIGN_RIGHT_LEFT ? lw : rw);
+		w = br->widthfunc(bar, &warg);
+		w = MIN(warg.max_width, w);
+
+		if (lw <= 0) { // if left is exhausted then switch to right side, and vice versa
+			lw = rw;
+			lx = rx;
+		} else if (rw <= 0) {
+			rw = lw;
+			rx = lx;
+		}
+
+		switch(br->alignment) {
+		default:
+		case BAR_ALIGN_NONE:
+		case BAR_ALIGN_LEFT_LEFT:
+		case BAR_ALIGN_LEFT:
+			bar->x[r] = lx;
+			if (lx == rx) {
+				rx += w;
+				rw -= w;
+			}
+			lx += w;
+			lw -= w;
+			break;
+		case BAR_ALIGN_LEFT_RIGHT:
+		case BAR_ALIGN_RIGHT:
+			bar->x[r] = lx + lw - w;
+			if (lx == rx)
+				rw -= w;
+			lw -= w;
+			break;
+		case BAR_ALIGN_LEFT_CENTER:
+		case BAR_ALIGN_CENTER:
+			bar->x[r] = lx + lw / 2 - w / 2;
+			if (lx == rx) {
+				rw = rx + rw - bar->x[r] - w;
+				rx = bar->x[r] + w;
+			}
+			lw = bar->x[r] - lx;
+			break;
+		case BAR_ALIGN_RIGHT_LEFT:
+			bar->x[r] = rx;
+			if (lx == rx) {
+				lx += w;
+				lw -= w;
+			}
+			rx += w;
+			rw -= w;
+			break;
+		case BAR_ALIGN_RIGHT_RIGHT:
+			bar->x[r] = rx + rw - w;
+			if (lx == rx)
+				lw -= w;
+			rw -= w;
+			break;
+		case BAR_ALIGN_RIGHT_CENTER:
+			bar->x[r] = rx + rw / 2 - w / 2;
+			if (lx == rx) {
+				lw = lx + lw - bar->x[r] + w;
+				lx = bar->x[r] + w;
+			}
+			rw = bar->x[r] - rx;
+			break;
+		}
+		bar->w[r] = w;
+		darg.x = bar->x[r];
+		darg.w = bar->w[r];
+		br->drawfunc(bar, &darg);
+	}
+	drw_map(drw, bar->win, 0, 0, bar->bw, bar->bh);
 }
 
 void
@@ -1007,16 +1350,16 @@ focusstack(const Arg *arg)
 	if (!selmon->sel || (selmon->sel->isfullscreen && lockfullscreen))
 		return;
 	if (arg->i > 0) {
-		for (c = selmon->sel->next; c && !ISVISIBLE(c); c = c->next);
+		for (c = selmon->sel->next; c && (!ISVISIBLE(c) || (arg->i == 1 && HIDDEN(c))); c = c->next);
 		if (!c)
-			for (c = selmon->clients; c && !ISVISIBLE(c); c = c->next);
+			for (c = selmon->clients; c && (!ISVISIBLE(c) || (arg->i == 1 && HIDDEN(c))); c = c->next);
 	} else {
 		for (i = selmon->clients; i != selmon->sel; i = i->next)
-			if (ISVISIBLE(i))
+			if (ISVISIBLE(i) && !(arg->i == -1 && HIDDEN(i)))
 				c = i;
 		if (!c)
 			for (; i; i = i->next)
-				if (ISVISIBLE(i))
+				if (ISVISIBLE(i) && !(arg->i == -1 && HIDDEN(i)))
 					c = i;
 	}
 	if (c) {
@@ -1243,12 +1586,14 @@ manage(Window w, XWindowAttributes *wa)
 	XChangeProperty(dpy, root, netatom[NetClientList], XA_WINDOW, 32, PropModeAppend,
 		(unsigned char *) &(c->win), 1);
 	XMoveResizeWindow(dpy, c->win, c->x + 2 * sw, c->y, c->w, c->h); /* some windows require this */
-	setclientstate(c, NormalState);
+	if (!HIDDEN(c))
+		setclientstate(c, NormalState);
 	if (c->mon == selmon)
 		unfocus(selmon->sel, 0);
 	c->mon->sel = c;
 	arrange(c->mon);
-	XMapWindow(dpy, c->win);
+	if (!HIDDEN(c))
+		XMapWindow(dpy, c->win);
 	focus(NULL);
 }
 
@@ -1369,7 +1714,7 @@ movemouse(const Arg *arg)
 Client *
 nexttiled(Client *c)
 {
-	for (; c && (c->isfloating || !ISVISIBLE(c)); c = c->next);
+	for (; c && (c->isfloating || !ISVISIBLE(c) || HIDDEN(c)); c = c->next);
 	return c;
 }
 
@@ -1411,7 +1756,8 @@ propertynotify(XEvent *e)
 			break;
 		case XA_WM_HINTS:
 			updatewmhints(c);
-			drawbars();
+			if (c->isurgent)
+				drawbars();
 			break;
 		}
 		if (ev->atom == XA_WM_NAME || ev->atom == netatom[NetWMName]) {
@@ -1537,7 +1883,7 @@ restack(Monitor *m)
 		XRaiseWindow(dpy, m->sel->win);
 	if (m->lt[m->sellt]->arrange) {
 		wc.stack_mode = Below;
-		wc.sibling = m->barwin;
+		wc.sibling = m->bar->win;
 		for (c = m->stack; c; c = c->snext)
 			if (!c->isfloating && ISVISIBLE(c)) {
 				XConfigureWindow(dpy, c->win, CWSibling|CWStackMode, &wc);
@@ -1915,9 +2261,11 @@ tile(Monitor *m)
 void
 togglebar(const Arg *arg)
 {
+	Bar *bar;
 	selmon->showbar = !selmon->showbar;
 	updatebarpos(selmon);
-	XMoveResizeWindow(dpy, selmon->barwin, selmon->wx, selmon->by, selmon->ww, bh);
+	for (bar = selmon->bar; bar; bar = bar->next)
+		XMoveResizeWindow(dpy, bar->win, bar->bx, bar->by, bar->bw, bar->bh);
 	arrange(selmon);
 }
 
@@ -2025,22 +2373,37 @@ unmapnotify(XEvent *e)
 void
 updatebars(void)
 {
+	Bar *bar;
 	Monitor *m;
 	XSetWindowAttributes wa = {
 		.override_redirect = True,
+		#if BAR_ALPHA_PATCH
+		.background_pixel = 0,
+		.border_pixel = 0,
+		.colormap = cmap,
+		#else
 		.background_pixmap = ParentRelative,
+		#endif // BAR_ALPHA_PATCH
 		.event_mask = ButtonPressMask|ExposureMask
 	};
 	XClassHint ch = {"dwm", "dwm"};
 	for (m = mons; m; m = m->next) {
-		if (m->barwin)
-			continue;
-		m->barwin = XCreateWindow(dpy, root, m->wx, m->by, m->ww, bh, 0, DefaultDepth(dpy, screen),
-				CopyFromParent, DefaultVisual(dpy, screen),
-				CWOverrideRedirect|CWBackPixmap|CWEventMask, &wa);
-		XDefineCursor(dpy, m->barwin, cursor[CurNormal]->cursor);
-		XMapRaised(dpy, m->barwin);
-		XSetClassHint(dpy, m->barwin, &ch);
+		for (bar = m->bar; bar; bar = bar->next) {
+			if (!bar->win) {
+				#if BAR_ALPHA_PATCH
+				bar->win = XCreateWindow(dpy, root, bar->bx, bar->by, bar->bw, bar->bh, 0, depth,
+						InputOutput, visual,
+						CWOverrideRedirect|CWBackPixel|CWBorderPixel|CWColormap|CWEventMask, &wa);
+				#else
+				bar->win = XCreateWindow(dpy, root, bar->bx, bar->by, bar->bw, bar->bh, 0, DefaultDepth(dpy, screen),
+						CopyFromParent, DefaultVisual(dpy, screen),
+						CWOverrideRedirect|CWBackPixmap|CWEventMask, &wa);
+				#endif // BAR_ALPHA_PATCH
+				XDefineCursor(dpy, bar->win, cursor[CurNormal]->cursor);
+				XMapRaised(dpy, bar->win);
+				XSetClassHint(dpy, bar->win, &ch);
+			}
+		}
 	}
 }
 
@@ -2049,12 +2412,30 @@ updatebarpos(Monitor *m)
 {
 	m->wy = m->my;
 	m->wh = m->mh;
-	if (m->showbar) {
-		m->wh -= bh;
-		m->by = m->topbar ? m->wy : m->wy + m->wh;
-		m->wy = m->topbar ? m->wy + bh : m->wy;
-	} else
-		m->by = -bh;
+	int num_bars;
+	Bar *bar;
+	int y_pad = 0;
+	int x_pad = 0;
+
+	for (bar = m->bar; bar; bar = bar->next) {
+		bar->bx = m->mx + x_pad;
+		bar->bw = m->ww - 2 * x_pad;
+		bar->bh = bh;
+	}
+
+	if (!m->showbar) {
+		for (bar = m->bar; bar; bar = bar->next)
+			bar->by = -bh - y_pad;
+		return;
+	}
+
+	for (num_bars = 0, bar = m->bar; bar; bar = bar->next, num_bars++)
+		if (bar->topbar)
+			m->wy = m->my + bh + y_pad;
+	m->wh = m->wh - y_pad * num_bars - bh * num_bars;
+
+	for (bar = m->bar; bar; bar = bar->next)
+		bar->by = (bar->topbar ? m->wy - bh : m->wy + m->wh);
 }
 
 void
@@ -2221,9 +2602,11 @@ updatesizehints(Client *c)
 void
 updatestatus(void)
 {
+	Monitor *m;
 	if (!gettextprop(root, XA_WM_NAME, stext, sizeof(stext)))
 		strcpy(stext, "dwm-"VERSION);
-	drawbar(selmon);
+	for (m = mons; m; m = m->next)
+		drawbar(m);
 }
 
 void
@@ -2298,12 +2681,14 @@ wintomon(Window w)
 	int x, y;
 	Client *c;
 	Monitor *m;
+	Bar *bar;
 
 	if (w == root && getrootptr(&x, &y))
 		return recttomon(x, y, 1, 1);
 	for (m = mons; m; m = m->next)
-		if (w == m->barwin)
-			return m;
+		for (bar = m->bar; bar; bar = bar->next)
+			if (w == bar->win)
+				return m;
 	if ((c = wintoclient(w)))
 		return c->mon;
 	return selmon;
@@ -2349,6 +2734,8 @@ void
 zoom(const Arg *arg)
 {
 	Client *c = selmon->sel;
+	if (!c)
+		c = selmon->sel;
 
 	if (!selmon->lt[selmon->sellt]->arrange || !c || c->isfloating)
 		return;
