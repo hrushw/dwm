@@ -1,14 +1,13 @@
 /* See LICENSE file for copyright and license details. */
 
-#include <X11/XF86keysym.h>
-
 /* appearance */
-static const unsigned int borderpx  = 2;        /* border pixel of windows */
+static const unsigned int borderpx  = 1;        /* border pixel of windows */
 static const unsigned int snap      = 32;       /* snap pixel */
 static const int showbar            = 1;        /* 0 means no bar */
 static const int topbar             = 1;        /* 0 means bottom bar */
-static const char *fonts[]          = { "JetBrainsMono Nerd Font:size=14" };
-static const char dmenufont[]       = "JetBrainsMono Nerd Font:size=14";
+static const char buttonbar[]       = "<O>";
+static const char *fonts[]          = { "monospace:size=10" };
+static const char dmenufont[]       = "monospace:size=10";
 static const char col_gray1[]       = "#222222";
 static const char col_gray2[]       = "#444444";
 static const char col_gray3[]       = "#bbbbbb";
@@ -18,6 +17,8 @@ static const char *colors[][3]      = {
 	/*               fg         bg         border   */
 	[SchemeNorm] = { col_gray3, col_gray1, col_gray2 },
 	[SchemeSel]  = { col_gray4, col_cyan,  col_cyan  },
+	[SchemeTabActive]  = { col_gray2, col_gray3,  col_gray2 },
+	[SchemeTabInactive]  = { col_gray1, col_gray3,  col_gray1 }
 };
 
 /* tagging */
@@ -30,6 +31,7 @@ static const Rule rules[] = {
 	 */
 	/* class      instance    title       tags mask     isfloating   monitor */
 	{ "Gimp",     NULL,       NULL,       0,            1,           -1 },
+	{ "Firefox",  NULL,       NULL,       1 << 8,       0,           -1 },
 };
 
 /* layout(s) */
@@ -39,15 +41,25 @@ static const int resizehints = 1;    /* 1 means respect size hints in tiled resi
 static const int lockfullscreen = 1; /* 1 will force focus on the fullscreen window */
 static const int refreshrate = 120;  /* refresh rate (per second) for client move/resize */
 
+/* Bartabgroups properties */
+#define BARTAB_BORDERS 1       // 0 = off, 1 = on
+#define BARTAB_BOTTOMBORDER 1  // 0 = off, 1 = on
+#define BARTAB_TAGSINDICATOR 1 // 0 = off, 1 = on if >1 client/view tag, 2 = always on
+#define BARTAB_TAGSPX 5        // # pixels for tag grid boxes
+#define BARTAB_TAGSROWS 3      // # rows in tag grid (9 tags, e.g. 3x3)
+static void (*bartabmonfns[])(Monitor *) = { monocle /* , customlayoutfn */ };
+static void (*bartabfloatfns[])(Monitor *) = { NULL /* , customlayoutfn */ };
+
 static const Layout layouts[] = {
 	/* symbol     arrange function */
 	{ "[]=",      tile },    /* first entry is default */
 	{ "><>",      NULL },    /* no layout function means floating behavior */
 	{ "[M]",      monocle },
+	{ "DD",       doubledeck },
 };
 
 /* key definitions */
-#define MODKEY Mod4Mask
+#define MODKEY Mod1Mask
 #define TAGKEYS(KEY,TAG) \
 	{ MODKEY,                       KEY,      view,           {.ui = 1 << TAG} }, \
 	{ MODKEY|ControlMask,           KEY,      toggleview,     {.ui = 1 << TAG} }, \
@@ -61,47 +73,38 @@ static const Layout layouts[] = {
 static char dmenumon[2] = "0"; /* component of dmenucmd, manipulated in spawn() */
 static const char *dmenucmd[] = { "dmenu_run", "-m", dmenumon, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4, NULL };
 static const char *termcmd[]  = { "st", NULL };
-static const char *term2cmd[]  = { "stkit", NULL };
-static const char *emacscmd[]  = { "emacsclient", "-nc", NULL };
-static const char *browsercmd[]  = { "qutebrowser", NULL };
 
-static const char *lockcmd[] = { "slock", NULL };
-static const char *brightnessinccmd[] = { "brightnessctl", "set", "5%+", NULL };
-static const char *brightnessdeccmd[] = { "brightnessctl", "set", "5%-", NULL };
-
-static const char *pipewirevolup[] = { "wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%+", NULL };
-static const char *pipewirevoldown[] = { "wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-", NULL };
-
+#include "movestack.c"
 static const Key keys[] = {
 	/* modifier                     key        function        argument */
 	{ MODKEY,                       XK_p,      spawn,          {.v = dmenucmd } },
-	{ MODKEY,                       XK_Return, spawn,          {.v = termcmd } },
-	{ MODKEY|ShiftMask,             XK_Return, spawn,          {.v = term2cmd } },
-	{ MODKEY|ShiftMask,             XK_e,      spawn,          {.v = emacscmd } },
-	{ MODKEY|ShiftMask,             XK_m,      spawn,          {.v = browsercmd } },
-
-	{ MODKEY,                       XK_b,           togglebar,      {0} },
-	{ MODKEY,                       XK_j,           focusstack,     {.i = +1 } },
-	{ MODKEY,                       XK_k,           focusstack,     {.i = -1 } },
-	{ MODKEY,                       XK_i,           incnmaster,     {.i = +1 } },
-	{ MODKEY,                       XK_d,           incnmaster,     {.i = -1 } },
-	{ MODKEY,                       XK_h,           setmfact,       {.f = -0.05} },
-	{ MODKEY,                       XK_l,           setmfact,       {.f = +0.05} },
-	{ MODKEY,                       XK_Tab,         zoom,           {0} },
-	{ MODKEY,                       XK_BackSpace,   view,           {0} },
-	{ MODKEY|ShiftMask,             XK_w,           killclient,     {0} },
-	{ MODKEY,                       XK_t,           setlayout,      {.v = &layouts[0]} },
-	{ MODKEY,                       XK_f,           setlayout,      {.v = &layouts[1]} },
-	{ MODKEY,                       XK_m,           setlayout,      {.v = &layouts[2]} },
-	{ MODKEY,                       XK_space,       setlayout,      {0} },
-	{ MODKEY|ShiftMask,             XK_space,       togglefloating, {0} },
-	{ MODKEY,                       XK_0,           view,           {.ui = ~0 } },
-	{ MODKEY|ShiftMask,             XK_0,           tag,            {.ui = ~0 } },
-	{ MODKEY,                       XK_comma,       focusmon,       {.i = -1 } },
-	{ MODKEY,                       XK_period,      focusmon,       {.i = +1 } },
-	{ MODKEY|ShiftMask,             XK_comma,       tagmon,         {.i = -1 } },
-	{ MODKEY|ShiftMask,             XK_period,      tagmon,         {.i = +1 } },
-
+	{ MODKEY|ShiftMask,             XK_Return, spawn,          {.v = termcmd } },
+	{ MODKEY,                       XK_b,      togglebar,      {0} },
+	{ MODKEY|ShiftMask,             XK_j,      rotatestack,    {.i = +1 } },
+	{ MODKEY|ShiftMask,             XK_k,      rotatestack,    {.i = -1 } },
+	{ MODKEY,                       XK_j,      focusstack,     {.i = +1 } },
+	{ MODKEY,                       XK_k,      focusstack,     {.i = -1 } },
+	{ MODKEY,                       XK_i,      incnmaster,     {.i = +1 } },
+	{ MODKEY,                       XK_d,      incnmaster,     {.i = -1 } },
+	{ MODKEY,                       XK_h,      setmfact,       {.f = -0.05} },
+	{ MODKEY,                       XK_l,      setmfact,       {.f = +0.05} },
+	{ MODKEY|ShiftMask,             XK_j,      movestack,      {.i = +1 } },
+	{ MODKEY|ShiftMask,             XK_k,      movestack,      {.i = -1 } },
+	{ MODKEY,                       XK_Return, zoom,           {0} },
+	{ MODKEY,                       XK_Tab,    view,           {0} },
+	{ MODKEY|ShiftMask,             XK_c,      killclient,     {0} },
+	{ MODKEY,                       XK_t,      setlayout,      {.v = &layouts[0]} },
+	{ MODKEY,                       XK_f,      setlayout,      {.v = &layouts[1]} },
+	{ MODKEY,                       XK_m,      setlayout,      {.v = &layouts[2]} },
+	{ MODKEY,                       XK_r,      setlayout,      {.v = &layouts[3]} },
+	{ MODKEY,                       XK_space,  setlayout,      {0} },
+	{ MODKEY|ShiftMask,             XK_space,  togglefloating, {0} },
+	{ MODKEY,                       XK_0,      view,           {.ui = ~0 } },
+	{ MODKEY|ShiftMask,             XK_0,      tag,            {.ui = ~0 } },
+	{ MODKEY,                       XK_comma,  focusmon,       {.i = -1 } },
+	{ MODKEY,                       XK_period, focusmon,       {.i = +1 } },
+	{ MODKEY|ShiftMask,             XK_comma,  tagmon,         {.i = -1 } },
+	{ MODKEY|ShiftMask,             XK_period, tagmon,         {.i = +1 } },
 	TAGKEYS(                        XK_1,                      0)
 	TAGKEYS(                        XK_2,                      1)
 	TAGKEYS(                        XK_3,                      2)
@@ -112,19 +115,13 @@ static const Key keys[] = {
 	TAGKEYS(                        XK_8,                      7)
 	TAGKEYS(                        XK_9,                      8)
 	{ MODKEY|ShiftMask,             XK_q,      quit,           {0} },
-
-
-	{ MODKEY,                       XK_Escape, spawn,          {.v = lockcmd } },
-	{ 0, XF86XK_MonBrightnessUp,    spawn,     {.v = brightnessinccmd } },
-	{ 0, XF86XK_MonBrightnessDown,  spawn,     {.v = brightnessdeccmd } },
-	{ 0, XF86XK_AudioRaiseVolume,   spawn,     {.v = pipewirevolup } },
-	{ 0, XF86XK_AudioLowerVolume,   spawn,     {.v = pipewirevoldown } },
 };
 
 /* button definitions */
 /* click can be ClkTagBar, ClkLtSymbol, ClkStatusText, ClkWinTitle, ClkClientWin, or ClkRootWin */
 static const Button buttons[] = {
 	/* click                event mask      button          function        argument */
+	{ ClkButton,            0,              Button1,        spawn,          {.v = dmenucmd } },
 	{ ClkLtSymbol,          0,              Button1,        setlayout,      {0} },
 	{ ClkLtSymbol,          0,              Button3,        setlayout,      {.v = &layouts[2]} },
 	{ ClkWinTitle,          0,              Button2,        zoom,           {0} },

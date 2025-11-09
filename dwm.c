@@ -547,12 +547,10 @@ buttonpress(XEvent *e)
 			if (i < LENGTH(tags)) {
 				click = ClkTagBar;
 				arg.ui = 1 << i;
-			} else if (ev->x < x + blw)
+			} else if (ev->x < x + TEXTW(selmon->ltsymbol))
 				click = ClkLtSymbol;
 			else if (ev->x > selmon->ww - TEXTW(stext))
 				click = ClkStatusText;
-			else
-				click = ClkWinTitle;
 			else // Focus clicked tab bar item
 				bartabcalculate(selmon, x, TEXTW(stext) - lrpad + 2, ev->x, battabclick);
 		}
@@ -856,7 +854,7 @@ drawbar(Monitor *m)
 			urg |= c->tags;
 	}
 	x = 0;
-	w = blw = TEXTW(buttonbar);
+	w = TEXTW(buttonbar);
 	drw_setscheme(drw, scheme[SchemeNorm]);
 	x = drw_text(drw, x, 0, w, bh, lrpad / 2, buttonbar, 0);
 	for (i = 0; i < LENGTH(tags); i++) {
@@ -1927,12 +1925,12 @@ tile(Monitor *m)
 	for (i = my = ty = 0, c = nexttiled(m->clients); c; c = nexttiled(c->next), i++)
 		if (i < m->nmaster) {
 			h = (m->wh - my) / (MIN(n, m->nmaster) - i);
-+			resize(c, m->wx, m->wy + my, mw - 2*bw, h - 2*bw, bw, 0);
+			resize(c, m->wx, m->wy + my, mw - 2*bw, h - 2*bw, bw, 0);
 			if (my + HEIGHT(c) < m->wh)
 				my += HEIGHT(c);
 		} else {
 			h = (m->wh - ty) / (n - i);
-+			resize(c, m->wx + mw, m->wy + ty, m->ww - mw - 2*bw, h - 2*bw, bw, 0);
+			resize(c, m->wx + mw, m->wy + ty, m->ww - mw - 2*bw, h - 2*bw, bw, 0);
 			if (ty + HEIGHT(c) < m->wh)
 				ty += HEIGHT(c);
 		}
