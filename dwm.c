@@ -735,6 +735,7 @@ bartabdraw(Monitor *m, Client *c, int unused, int x, int w, int groupactive, Arg
 	if (!c) return;
 	int i, nclienttags = 0, nviewtags = 0;
 
+	/*
 	drw_setscheme(drw, scheme[
 		m->sel == c
 		? SchemeSel
@@ -745,6 +746,14 @@ bartabdraw(Monitor *m, Client *c, int unused, int x, int w, int groupactive, Arg
 		: groupactive
 		? SchemeTabActive
 		: SchemeTabInactive
+	]);
+	*/
+
+	drw_setscheme(drw, scheme[
+		#ifdef HIDDEN
+		HIDDEN(c) ? SchemeHid :
+		#endif
+		m->sel == c ? SchemeSel : ( groupactive ? SchemeTabActive : SchemeTabInactive )
 	]);
 	drw_text(drw, x, 0, w, bh, lrpad / 2, c->name, 0);
 
