@@ -7,7 +7,7 @@ static const int showbar            = 1;        /* 0 means no standard bar */
 static const int topbar             = 1;        /* 0 means standard bar at bottom */
 static const int extrabar           = 1;        /* 0 means no extra bar */
 static const char statussep         = ';';      /* separator between statuses */
-static const char buttonbar[]       = "[ ]";
+static const char buttonbar[]       = "[@]";
 static const char *fonts[]          = { "JetBrainsMono Nerd Font:size=12" };
 static const char dmenufont[]       = "JetBrainsMono Nerd Font:size=14";
 static const char col_gray1[]       = "#222222";
@@ -75,6 +75,7 @@ static const Layout layouts[] = {
 static char dmenumon[2] = "0"; /* component of dmenucmd, manipulated in spawn() */
 static const char *dmenucmd[] = { "dmenu_run", "-m", dmenumon, "-fn", dmenufont, "-nb", col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4, NULL };
 static const char *termcmd[]  = { "st", NULL };
+static const char *layoutmenu_cmd = "layoutmenu.sh";
 
 #include "movestack.c"
 static const Key keys[] = {
@@ -134,7 +135,7 @@ static const Button buttons[] = {
 	/* click                event mask      button          function        argument */
 	{ ClkButton,            0,              Button1,        spawn,          {.v = dmenucmd } },
 	{ ClkLtSymbol,          0,              Button1,        setlayout,      {0} },
-	{ ClkLtSymbol,          0,              Button3,        setlayout,      {.v = &layouts[2]} },
+	{ ClkLtSymbol,          0,              Button3,        layoutmenu,     {0} },
 	{ ClkWinTitle,          0,              Button2,        zoom,           {0} },
 	{ ClkStatusText,        0,              Button2,        spawn,          {.v = termcmd } },
 	{ ClkExBarLeftStatus,   0,              Button2,        spawn,          {.v = termcmd } },
